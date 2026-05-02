@@ -6,9 +6,10 @@ import re
 import csv
 import io
 from datetime import datetime
-from fake_useragent import UserAgent
 
 app = Flask(__name__)
+
+SERPAPI_KEY = 'paste_your_serpapi_key_here'
 
 def init_db():
     conn = sqlite3.connect('stores.db')
@@ -23,26 +24,19 @@ def init_db():
     conn.commit()
     conn.close()
 
-def get_headers():
-    try:
-        ua = UserAgent()
-        return {'User-Agent': ua.random}
-    except:
-        return {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-
 def extract_emails(text):
     pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
-    return list(set(re.findall(pattern, text)))
+    emails = list(set(re.findall(pattern, text)))
+    return [e for e in emails if not any(e.endswith(x) for x in ['.png','.jpg','.css','.js','.svg'])]
 
 def scrape_store_email(domain):
-    pages = ['/pages/contact', '/pages/about-us', '/pages/about', '/policies/contact-information']
+    pages = ['/pages/contact','/pages/about-us','/pages/about','/policies/contact-information']
+    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     for page in pages:
         try:
-            url = f'https://{domain}{page}'
-            r = requests.get(url, headers=get_headers(), timeout=8)
+            r = requests.get(f'https://{domain}{page}', headers=headers, timeout=8)
             if r.status_code == 200:
                 emails = extract_emails(r.text)
-                emails = [e for e in emails if not e.endswith(('.png','.jpg','.css','.js'))]
                 if emails:
                     return emails[0]
         except:
@@ -51,30 +45,42 @@ def scrape_store_email(domain):
 
 def search_shopify_stores(keyword, max_results=20):
     stores = []
+    seen = set()
     queries = [
         f'site:myshopify.com "{keyword}"',
         f'"powered by shopify" "{keyword}"',
         f'site:myshopify.com "{keyword}" inurl:contact',
     ]
-    seen = set()
     for query in queries:
+        if len(stores) >= max_results:
+            break
         try:
-            url = f'https://www.google.com/search?q={requests.utils.quote(query)}&num=10&tbs=qdr:m'
-            r = requests.get(url, headers=get_headers(), timeout=10)
-            soup = BeautifulSoup(r.text, 'html.parser')
-            for g in soup.find_all('div', class_='g'):
-                try:
-                    link = g.find('a')['href']
-                    title = g.find('h3').text if g.find('h3') else 'Unknown Store'
-                    domain = re.search(r'https?://([^/]+)', link)
-                    if domain:
-                        domain = domain.group(1)
-                        if domain not in seen and ('myshopify' in domain or 'shopify' in link.lower()):
-                            seen.add(domain)
-                            stores.append({'domain': domain, 'name': title, 'niche': keyword, 'email': '', 'date_found': datetime.now().strftime('%Y-%m-%d %H:%M')})
-                except:
-                    continue
-        except:
+            url = 'https://serpapi.com/search'
+            params = {
+                'api_key': SERPAPI_KEY,
+                'q': query,
+                'num': 10,
+                'tbs': 'qdr:m'
+            }
+            r = requests.get(url, params=params, timeout=10)
+            data = r.json()
+            for item in data.get('organic_results', []):
+                link = item.get('link', '')
+                title = item.get('title', 'Unknown Store')
+                domain_match = re.search(r'https?://([^/]+)', link)
+                if domain_match:
+                    domain = domain_match.group(1)
+                    if domain not in seen:
+                        seen.add(domain)
+                        stores.append({
+                            'domain': domain,
+                            'name': title,
+                            'niche': keyword,
+                            'email': '',
+                            'date_found': datetime.now().strftime('%Y-%m-%d %H:%M')
+                        })
+        except Exception as e:
+            print(f'Error: {e}')
             continue
     return stores[:max_results]
 
@@ -82,8 +88,8 @@ def save_store(store):
     try:
         conn = sqlite3.connect('stores.db')
         c = conn.cursor()
-        c.execute('INSERT OR IGNORE INTO stores (domain, name, email, niche, date_found) VALUES (?,?,?,?,?)',
-                  (store['domain'], store['name'], store['email'], store['niche'], store['date_found']))
+        c.execute('INSERT OR IGNORE INTO stores (domain,name,email,niche,date_found) VALUES (?,?,?,?,?)',
+                  (store['domain'],store['name'],store['email'],store['niche'],store['date_found']))
         conn.commit()
         conn.close()
     except:
@@ -109,7 +115,7 @@ body{background:#f8f9fa;}
 .card{border:none;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);}
 .btn-primary{background:#5c6bc0;border-color:#5c6bc0;}
 .badge-email{background:#e8f5e9;color:#2e7d32;padding:4px 10px;border-radius:20px;font-size:12px;}
-.badge-no-email{background:#fce4ec;color:#c62828;padding:4px 10px;border-radius:20px;font-size:12px;}
+.badge-no{background:#fce4ec;color:#c62828;padding:4px 10px;border-radius:20px;font-size:12px;}
 #loading{display:none;}
 </style>
 </head>
@@ -123,7 +129,7 @@ body{background:#f8f9fa;}
     <h5 class="mb-3">Find New Shopify Stores</h5>
     <div class="row g-2">
       <div class="col-md-6">
-        <input type="text" id="keyword" class="form-control" placeholder="Enter niche keyword (e.g. fashion, fitness, pets)">
+        <input type="text" id="keyword" class="form-control" placeholder="Enter niche (e.g. fashion, fitness, pets)">
       </div>
       <div class="col-md-3">
         <select id="maxResults" class="form-select">
@@ -138,11 +144,11 @@ body{background:#f8f9fa;}
     </div>
     <div id="loading" class="text-center mt-3">
       <div class="spinner-border text-primary"></div>
-      <p class="mt-2 text-muted">Searching for stores and extracting emails...</p>
+      <p class="mt-2 text-muted">Searching for new Shopify stores...</p>
     </div>
   </div>
 
-  <div class="card p-4 mb-4" id="statsCard" style="display:none;">
+  <div class="card p-4 mb-4">
     <div class="row text-center">
       <div class="col"><h3 id="totalCount">0</h3><small class="text-muted">Total Saved</small></div>
       <div class="col"><h3 id="emailCount">0</h3><small class="text-muted">With Email</small></div>
@@ -160,7 +166,7 @@ body{background:#f8f9fa;}
       </div>
     </div>
     <div class="table-responsive">
-      <table class="table table-hover" id="storeTable">
+      <table class="table table-hover">
         <thead class="table-light">
           <tr><th>Store Name</th><th>Domain</th><th>Email</th><th>Niche</th><th>Date Found</th></tr>
         </thead>
@@ -169,66 +175,45 @@ body{background:#f8f9fa;}
     </div>
   </div>
 </div>
-
 <script>
-async function searchStores() {
-  const keyword = document.getElementById('keyword').value.trim();
-  const maxResults = document.getElementById('maxResults').value;
-  if (!keyword) { alert('Enter a keyword'); return; }
-  document.getElementById('loading').style.display = 'block';
-  try {
-    const res = await fetch('/search', {
-      method: 'POST',
-      headers: {'Content-Type':'application/json'},
-      body: JSON.stringify({keyword, max_results: parseInt(maxResults)})
-    });
-    const data = await res.json();
+async function searchStores(){
+  const keyword=document.getElementById('keyword').value.trim();
+  const maxResults=document.getElementById('maxResults').value;
+  if(!keyword){alert('Enter a keyword');return;}
+  document.getElementById('loading').style.display='block';
+  try{
+    const res=await fetch('/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword,max_results:parseInt(maxResults)})});
+    const data=await res.json();
     alert(data.message);
     loadStores();
-  } catch(e) { alert('Error: ' + e); }
-  document.getElementById('loading').style.display = 'none';
+  }catch(e){alert('Error: '+e);}
+  document.getElementById('loading').style.display='none';
 }
-
-async function loadStores() {
-  const res = await fetch('/stores');
-  const stores = await res.json();
-  const tbody = document.getElementById('tableBody');
-  tbody.innerHTML = '';
-  stores.forEach(s => {
-    const emailBadge = s.email
-      ? `<span class="badge-email">${s.email}</span>`
-      : `<span class="badge-no-email">No email</span>`;
-    tbody.innerHTML += `<tr>
-      <td>${s.name}</td>
-      <td><a href="https://${s.domain}" target="_blank">${s.domain}</a></td>
-      <td>${emailBadge}</td>
-      <td><span class="badge bg-light text-dark">${s.niche}</span></td>
-      <td><small>${s.date_found}</small></td>
-    </tr>`;
+async function loadStores(){
+  const res=await fetch('/stores');
+  const stores=await res.json();
+  const tbody=document.getElementById('tableBody');
+  tbody.innerHTML='';
+  stores.forEach(s=>{
+    const em=s.email?`<span class="badge-email">${s.email}</span>`:`<span class="badge-no">No email</span>`;
+    tbody.innerHTML+=`<tr><td>${s.name}</td><td><a href="https://${s.domain}" target="_blank">${s.domain}</a></td><td>${em}</td><td><span class="badge bg-light text-dark">${s.niche}</span></td><td><small>${s.date_found}</small></td></tr>`;
   });
-  const withEmail = stores.filter(s=>s.email).length;
-  const niches = new Set(stores.map(s=>s.niche)).size;
-  document.getElementById('totalCount').textContent = stores.length;
-  document.getElementById('emailCount').textContent = withEmail;
-  document.getElementById('nicheCount').textContent = niches;
-  document.getElementById('statsCard').style.display = 'block';
+  const withEmail=stores.filter(s=>s.email).length;
+  const niches=new Set(stores.map(s=>s.niche)).size;
+  document.getElementById('totalCount').textContent=stores.length;
+  document.getElementById('emailCount').textContent=withEmail;
+  document.getElementById('nicheCount').textContent=niches;
 }
-
-function filterTable() {
-  const val = document.getElementById('filterInput').value.toLowerCase();
-  document.querySelectorAll('#tableBody tr').forEach(row => {
-    row.style.display = row.textContent.toLowerCase().includes(val) ? '' : 'none';
-  });
+function filterTable(){
+  const val=document.getElementById('filterInput').value.toLowerCase();
+  document.querySelectorAll('#tableBody tr').forEach(row=>{row.style.display=row.textContent.toLowerCase().includes(val)?'':'none';});
 }
-
-function exportCSV() { window.location.href = '/export'; }
-
-async function clearAll() {
-  if (!confirm('Clear all saved stores?')) return;
-  await fetch('/clear', {method:'POST'});
+function exportCSV(){window.location.href='/export';}
+async function clearAll(){
+  if(!confirm('Clear all?'))return;
+  await fetch('/clear',{method:'POST'});
   loadStores();
 }
-
 loadStores();
 </script>
 </body>
@@ -240,18 +225,18 @@ def index():
     init_db()
     return render_template_string(HTML)
 
-@app.route('/search', methods=['POST'])
+@app.route('/search',methods=['POST'])
 def search():
-    data = request.json
-    keyword = data.get('keyword', '')
-    max_results = data.get('max_results', 20)
-    stores = search_shopify_stores(keyword, max_results)
-    count = 0
+    data=request.json
+    keyword=data.get('keyword','')
+    max_results=data.get('max_results',20)
+    stores=search_shopify_stores(keyword,max_results)
+    count=0
     for store in stores:
-        store['email'] = scrape_store_email(store['domain'])
+        store['email']=scrape_store_email(store['domain'])
         save_store(store)
-        count += 1
-    return jsonify({'message': f'Found and saved {count} stores for "{keyword}"', 'count': count})
+        count+=1
+    return jsonify({'message':f'Found and saved {count} stores for "{keyword}"','count':count})
 
 @app.route('/stores')
 def stores():
@@ -259,24 +244,24 @@ def stores():
 
 @app.route('/export')
 def export():
-    stores = get_all_stores()
-    output = io.StringIO()
-    writer = csv.DictWriter(output, fieldnames=['id','domain','name','email','niche','date_found'])
+    stores=get_all_stores()
+    output=io.StringIO()
+    writer=csv.DictWriter(output,fieldnames=['id','domain','name','email','niche','date_found'])
     writer.writeheader()
     writer.writerows(stores)
-    response = make_response(output.getvalue())
-    response.headers['Content-Disposition'] = 'attachment; filename=shopify_stores.csv'
-    response.headers['Content-type'] = 'text/csv'
+    response=make_response(output.getvalue())
+    response.headers['Content-Disposition']='attachment; filename=shopify_stores.csv'
+    response.headers['Content-type']='text/csv'
     return response
 
-@app.route('/clear', methods=['POST'])
+@app.route('/clear',methods=['POST'])
 def clear():
-    conn = sqlite3.connect('stores.db')
+    conn=sqlite3.connect('stores.db')
     conn.execute('DELETE FROM stores')
     conn.commit()
     conn.close()
-    return jsonify({'status': 'cleared'})
+    return jsonify({'status':'cleared'})
 
-if __name__ == '__main__':
+if __name__=='__main__':
     init_db()
-    app.run(host='0.0.0.0', port=5000, debug=False)
+    app.run(host='0.0.0.0',port=5000,debug=False)
