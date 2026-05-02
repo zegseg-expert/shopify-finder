@@ -27,10 +27,17 @@ def init_db():
 def extract_emails(text):
     pattern = r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}'
     emails = list(set(re.findall(pattern, text)))
-    return [e for e in emails if not any(e.endswith(x) for x in ['.png','.jpg','.css','.js','.svg'])]
+    return [e for e in emails if not any(e.endswith(x) for x in ['.png','.jpg','.css','.js','.svg','.gif','.woff'])]
 
 def scrape_store_email(domain):
-    pages = ['/pages/contact','/pages/about-us','/pages/about','/policies/contact-information']
+    pages = [
+        '/pages/contact',
+        '/pages/about-us',
+        '/pages/about',
+        '/policies/contact-information',
+        '/pages/faq',
+        '/pages/help',
+    ]
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     for page in pages:
         try:
@@ -43,13 +50,17 @@ def scrape_store_email(domain):
             continue
     return ''
 
-def search_shopify_stores(keyword, max_results=20):
+def search_shopify_stores(keyword, max_results=50):
     stores = []
     seen = set()
     queries = [
         f'site:myshopify.com "{keyword}"',
-        f'"powered by shopify" "{keyword}"',
         f'site:myshopify.com "{keyword}" inurl:contact',
+        f'site:myshopify.com "{keyword}" inurl:about',
+        f'"powered by shopify" "{keyword}"',
+        f'site:myshopify.com "{keyword}" "@gmail.com"',
+        f'site:myshopify.com "{keyword}" "new arrivals"',
+        f'site:myshopify.com "{keyword}" "free shipping"',
     ]
     for query in queries:
         if len(stores) >= max_results:
@@ -60,7 +71,8 @@ def search_shopify_stores(keyword, max_results=20):
                 'api_key': SERPAPI_KEY,
                 'q': query,
                 'num': 10,
-                'tbs': 'qdr:m'
+                'tbs': 'qdr:m',
+                'engine': 'google',
             }
             r = requests.get(url, params=params, timeout=15)
             data = r.json()
@@ -69,11 +81,11 @@ def search_shopify_stores(keyword, max_results=20):
                 title = item.get('title', 'Unknown Store')
                 domain_match = re.search(r'https?://([^/]+)', link)
                 if domain_match:
-                    domain = domain_match.group(1)
-                    if domain not in seen:
-                        seen.add(domain)
+                    d = domain_match.group(1)
+                    if d not in seen:
+                        seen.add(d)
                         stores.append({
-                            'domain': domain,
+                            'domain': d,
                             'name': title,
                             'niche': keyword,
                             'email': '',
@@ -95,13 +107,24 @@ def save_store(store):
     except:
         pass
 
-def get_all_stores():
+def get_all_stores(niche_filter=''):
     conn = sqlite3.connect('stores.db')
     c = conn.cursor()
-    c.execute('SELECT * FROM stores ORDER BY id DESC')
+    if niche_filter:
+        c.execute('SELECT * FROM stores WHERE niche=? ORDER BY id DESC', (niche_filter,))
+    else:
+        c.execute('SELECT * FROM stores ORDER BY id DESC')
     rows = c.fetchall()
     conn.close()
     return [{'id':r[0],'domain':r[1],'name':r[2],'email':r[3],'niche':r[4],'date_found':r[5]} for r in rows]
+
+def get_niches():
+    conn = sqlite3.connect('stores.db')
+    c = conn.cursor()
+    c.execute('SELECT DISTINCT niche FROM stores')
+    rows = c.fetchall()
+    conn.close()
+    return [r[0] for r in rows]
 
 HTML = '''
 <!DOCTYPE html>
@@ -114,9 +137,13 @@ body{background:#f8f9fa;}
 .navbar{background:#5c6bc0!important;}
 .card{border:none;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);}
 .btn-primary{background:#5c6bc0;border-color:#5c6bc0;}
+.btn-primary:hover{background:#3949ab;border-color:#3949ab;}
 .badge-email{background:#e8f5e9;color:#2e7d32;padding:4px 10px;border-radius:20px;font-size:12px;}
 .badge-no{background:#fce4ec;color:#c62828;padding:4px 10px;border-radius:20px;font-size:12px;}
 #loading{display:none;}
+.stat-card{background:linear-gradient(135deg,#5c6bc0,#3949ab);color:white;border-radius:12px;padding:1.2rem;}
+.stat-card h3{font-size:2rem;font-weight:700;}
+.stat-card small{opacity:0.8;}
 </style>
 </head>
 <body>
@@ -125,95 +152,191 @@ body{background:#f8f9fa;}
   <span class="text-white-50 small">Personal Use Only</span>
 </nav>
 <div class="container py-4">
+
   <div class="card p-4 mb-4">
-    <h5 class="mb-3">Find New Shopify Stores</h5>
+    <h5 class="mb-3 fw-bold">🔍 Find New Shopify Stores</h5>
     <div class="row g-2">
-      <div class="col-md-6">
-        <input type="text" id="keyword" class="form-control" placeholder="Enter niche (e.g. fashion, fitness, pets)">
+      <div class="col-md-5">
+        <input type="text" id="keyword" class="form-control" placeholder="Niche keyword (e.g. fashion, fitness, pets, beauty)">
       </div>
       <div class="col-md-3">
         <select id="maxResults" class="form-select">
-          <option value="10">10 stores</option>
-          <option value="20" selected>20 stores</option>
+          <option value="20">20 stores</option>
           <option value="30">30 stores</option>
+          <option value="50" selected>50 stores (max)</option>
         </select>
       </div>
-      <div class="col-md-3">
-        <button class="btn btn-primary w-100" onclick="searchStores()">🔍 Search Stores</button>
+      <div class="col-md-2">
+        <select id="timeFilter" class="form-select">
+          <option value="qdr:w">Past week</option>
+          <option value="qdr:m" selected>Past month</option>
+          <option value="qdr:y">Past year</option>
+        </select>
+      </div>
+      <div class="col-md-2">
+        <button class="btn btn-primary w-100 fw-bold" onclick="searchStores()">Search ↗</button>
       </div>
     </div>
     <div id="loading" class="text-center mt-3">
       <div class="spinner-border text-primary"></div>
-      <p class="mt-2 text-muted">Searching for new Shopify stores...</p>
+      <p class="mt-2 text-muted small">Searching Google for new Shopify stores and extracting emails... this may take 1-2 minutes.</p>
     </div>
   </div>
 
-  <div class="card p-4 mb-4">
-    <div class="row text-center">
-      <div class="col"><h3 id="totalCount">0</h3><small class="text-muted">Total Saved</small></div>
-      <div class="col"><h3 id="emailCount">0</h3><small class="text-muted">With Email</small></div>
-      <div class="col"><h3 id="nicheCount">0</h3><small class="text-muted">Niches</small></div>
+  <div class="row g-3 mb-4">
+    <div class="col-4">
+      <div class="stat-card text-center">
+        <h3 id="totalCount">0</h3>
+        <small>Total Saved</small>
+      </div>
+    </div>
+    <div class="col-4">
+      <div class="stat-card text-center">
+        <h3 id="emailCount">0</h3>
+        <small>With Email</small>
+      </div>
+    </div>
+    <div class="col-4">
+      <div class="stat-card text-center">
+        <h3 id="nicheCount">0</h3>
+        <small>Niches</small>
+      </div>
     </div>
   </div>
 
   <div class="card p-4">
-    <div class="d-flex justify-content-between align-items-center mb-3">
-      <h5 class="mb-0">Saved Stores</h5>
-      <div class="d-flex gap-2">
-        <input type="text" id="filterInput" class="form-control form-control-sm" placeholder="Filter..." oninput="filterTable()" style="width:200px;">
-        <button class="btn btn-sm btn-outline-success" onclick="exportCSV()">📥 Export CSV</button>
-        <button class="btn btn-sm btn-outline-danger" onclick="clearAll()">🗑️ Clear All</button>
+    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+      <h5 class="mb-0 fw-bold">📋 Saved Stores</h5>
+      <div class="d-flex gap-2 flex-wrap">
+        <input type="text" id="filterInput" class="form-control form-control-sm" placeholder="Filter stores..." oninput="filterTable()" style="width:180px;">
+        <select id="nicheFilterSelect" class="form-select form-select-sm" onchange="filterByNiche()" style="width:140px;">
+          <option value="">All niches</option>
+        </select>
+        <button class="btn btn-sm btn-success" onclick="exportCSV()">📥 CSV</button>
+        <button class="btn btn-sm btn-warning" onclick="exportEmails()">📧 Emails</button>
+        <button class="btn btn-sm btn-danger" onclick="clearAll()">🗑️ Clear</button>
       </div>
     </div>
     <div class="table-responsive">
-      <table class="table table-hover">
+      <table class="table table-hover table-sm">
         <thead class="table-light">
-          <tr><th>Store Name</th><th>Domain</th><th>Email</th><th>Niche</th><th>Date Found</th></tr>
+          <tr>
+            <th>#</th>
+            <th>Store Name</th>
+            <th>Domain</th>
+            <th>Email</th>
+            <th>Niche</th>
+            <th>Date Found</th>
+          </tr>
         </thead>
         <tbody id="tableBody"></tbody>
       </table>
     </div>
+    <div id="emailsList" class="mt-3" style="display:none;">
+      <h6>📧 All Emails (copy below):</h6>
+      <textarea id="emailsText" class="form-control" rows="5" readonly></textarea>
+    </div>
   </div>
 </div>
+
 <script>
+let allStores = [];
+
 async function searchStores(){
-  const keyword=document.getElementById('keyword').value.trim();
-  const maxResults=document.getElementById('maxResults').value;
+  const keyword = document.getElementById('keyword').value.trim();
+  const maxResults = document.getElementById('maxResults').value;
+  const timeFilter = document.getElementById('timeFilter').value;
   if(!keyword){alert('Enter a keyword');return;}
   document.getElementById('loading').style.display='block';
   try{
-    const res=await fetch('/search',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({keyword,max_results:parseInt(maxResults)})});
-    const data=await res.json();
+    const res = await fetch('/search', {
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({keyword, max_results:parseInt(maxResults), time_filter:timeFilter})
+    });
+    const data = await res.json();
     alert(data.message);
     loadStores();
   }catch(e){alert('Error: '+e);}
   document.getElementById('loading').style.display='none';
 }
+
 async function loadStores(){
-  const res=await fetch('/stores');
-  const stores=await res.json();
-  const tbody=document.getElementById('tableBody');
-  tbody.innerHTML='';
-  stores.forEach(s=>{
-    const em=s.email?`<span class="badge-email">${s.email}</span>`:`<span class="badge-no">No email</span>`;
-    tbody.innerHTML+=`<tr><td>${s.name}</td><td><a href="https://${s.domain}" target="_blank">${s.domain}</a></td><td>${em}</td><td><span class="badge bg-light text-dark">${s.niche}</span></td><td><small>${s.date_found}</small></td></tr>`;
+  const res = await fetch('/stores');
+  allStores = await res.json();
+  renderTable(allStores);
+  updateStats(allStores);
+  updateNicheFilter(allStores);
+}
+
+function renderTable(stores){
+  const tbody = document.getElementById('tableBody');
+  tbody.innerHTML = '';
+  stores.forEach((s,i) => {
+    const em = s.email
+      ? `<span class="badge-email">${s.email}</span>`
+      : `<span class="badge-no">No email</span>`;
+    tbody.innerHTML += `<tr>
+      <td><small>${i+1}</small></td>
+      <td><small>${s.name}</small></td>
+      <td><small><a href="https://${s.domain}" target="_blank">${s.domain}</a></small></td>
+      <td>${em}</td>
+      <td><span class="badge bg-light text-dark">${s.niche}</span></td>
+      <td><small>${s.date_found}</small></td>
+    </tr>`;
   });
-  const withEmail=stores.filter(s=>s.email).length;
-  const niches=new Set(stores.map(s=>s.niche)).size;
-  document.getElementById('totalCount').textContent=stores.length;
-  document.getElementById('emailCount').textContent=withEmail;
-  document.getElementById('nicheCount').textContent=niches;
 }
+
+function updateStats(stores){
+  const withEmail = stores.filter(s=>s.email).length;
+  const niches = new Set(stores.map(s=>s.niche)).size;
+  document.getElementById('totalCount').textContent = stores.length;
+  document.getElementById('emailCount').textContent = withEmail;
+  document.getElementById('nicheCount').textContent = niches;
+}
+
+function updateNicheFilter(stores){
+  const niches = [...new Set(stores.map(s=>s.niche))];
+  const sel = document.getElementById('nicheFilterSelect');
+  sel.innerHTML = '<option value="">All niches</option>';
+  niches.forEach(n => sel.innerHTML += `<option value="${n}">${n}</option>`);
+}
+
 function filterTable(){
-  const val=document.getElementById('filterInput').value.toLowerCase();
-  document.querySelectorAll('#tableBody tr').forEach(row=>{row.style.display=row.textContent.toLowerCase().includes(val)?'':'none';});
+  const val = document.getElementById('filterInput').value.toLowerCase();
+  const filtered = allStores.filter(s =>
+    s.name.toLowerCase().includes(val) ||
+    s.domain.toLowerCase().includes(val) ||
+    (s.email||'').toLowerCase().includes(val)
+  );
+  renderTable(filtered);
 }
+
+function filterByNiche(){
+  const niche = document.getElementById('nicheFilterSelect').value;
+  const filtered = niche ? allStores.filter(s=>s.niche===niche) : allStores;
+  renderTable(filtered);
+  updateStats(filtered);
+}
+
 function exportCSV(){window.location.href='/export';}
+
+function exportEmails(){
+  const emails = allStores.filter(s=>s.email).map(s=>s.email).join('\n');
+  if(!emails){alert('No emails found yet.');return;}
+  document.getElementById('emailsList').style.display='block';
+  document.getElementById('emailsText').value=emails;
+  document.getElementById('emailsText').select();
+  document.execCommand('copy');
+  alert('Emails copied to clipboard!');
+}
+
 async function clearAll(){
-  if(!confirm('Clear all?'))return;
+  if(!confirm('Clear all saved stores?'))return;
   await fetch('/clear',{method:'POST'});
   loadStores();
 }
+
 loadStores();
 </script>
 </body>
@@ -225,43 +348,48 @@ def index():
     init_db()
     return render_template_string(HTML)
 
-@app.route('/search',methods=['POST'])
+@app.route('/search', methods=['POST'])
 def search():
-    data=request.json
-    keyword=data.get('keyword','')
-    max_results=data.get('max_results',20)
-    stores=search_shopify_stores(keyword,max_results)
-    count=0
+    data = request.json
+    keyword = data.get('keyword','')
+    max_results = data.get('max_results', 50)
+    time_filter = data.get('time_filter', 'qdr:m')
+    stores = search_shopify_stores(keyword, max_results)
+    count = 0
     for store in stores:
-        store['email']=scrape_store_email(store['domain'])
+        store['email'] = scrape_store_email(store['domain'])
         save_store(store)
-        count+=1
-    return jsonify({'message':f'Found and saved {count} stores for "{keyword}"','count':count})
+        count += 1
+    return jsonify({
+        'message': f'Found and saved {count} stores for "{keyword}"! {len([s for s in stores if s["email"]])} have emails.',
+        'count': count
+    })
 
 @app.route('/stores')
 def stores():
-    return jsonify(get_all_stores())
+    niche = request.args.get('niche','')
+    return jsonify(get_all_stores(niche))
 
 @app.route('/export')
 def export():
-    stores=get_all_stores()
-    output=io.StringIO()
-    writer=csv.DictWriter(output,fieldnames=['id','domain','name','email','niche','date_found'])
+    stores = get_all_stores()
+    output = io.StringIO()
+    writer = csv.DictWriter(output, fieldnames=['id','domain','name','email','niche','date_found'])
     writer.writeheader()
     writer.writerows(stores)
-    response=make_response(output.getvalue())
-    response.headers['Content-Disposition']='attachment; filename=shopify_stores.csv'
-    response.headers['Content-type']='text/csv'
+    response = make_response(output.getvalue())
+    response.headers['Content-Disposition'] = 'attachment; filename=shopify_stores.csv'
+    response.headers['Content-type'] = 'text/csv'
     return response
 
-@app.route('/clear',methods=['POST'])
+@app.route('/clear', methods=['POST'])
 def clear():
-    conn=sqlite3.connect('stores.db')
+    conn = sqlite3.connect('stores.db')
     conn.execute('DELETE FROM stores')
     conn.commit()
     conn.close()
     return jsonify({'status':'cleared'})
 
-if __name__=='__main__':
+if __name__ == '__main__':
     init_db()
-    app.run(host='0.0.0.0',port=5000,debug=False)
+    app.run(host='0.0.0.0', port=5000, debug=False)
