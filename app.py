@@ -9,7 +9,7 @@ from datetime import datetime
 
 app = Flask(__name__)
 
-SERPAPI_KEY = 'paste_your_serpapi_key_here'
+SERPAPI_KEY = 'f4cb1dfb81de2e942b9773416ab32c9dac86ea7dcab5c541321d0cc585b43f6d'
 
 def init_db():
     conn = sqlite3.connect('stores.db')
@@ -62,7 +62,7 @@ def search_shopify_stores(keyword, max_results=20):
                 'num': 10,
                 'tbs': 'qdr:m'
             }
-            r = requests.get(url, params=params, timeout=10)
+            r = requests.get(url, params=params, timeout=15)
             data = r.json()
             for item in data.get('organic_results', []):
                 link = item.get('link', '')
