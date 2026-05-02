@@ -30,14 +30,7 @@ def extract_emails(text):
     return [e for e in emails if not any(e.endswith(x) for x in ['.png','.jpg','.css','.js','.svg','.gif','.woff'])]
 
 def scrape_store_email(domain):
-    pages = [
-        '/pages/contact',
-        '/pages/about-us',
-        '/pages/about',
-        '/policies/contact-information',
-        '/pages/faq',
-        '/pages/help',
-    ]
+    pages = ['/pages/contact','/pages/about-us','/pages/about','/policies/contact-information','/pages/faq']
     headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
     for page in pages:
         try:
@@ -50,7 +43,7 @@ def scrape_store_email(domain):
             continue
     return ''
 
-def search_shopify_stores(keyword, max_results=50):
+def search_shopify_stores(keyword, max_results=50, time_filter='qdr:m'):
     stores = []
     seen = set()
     queries = [
@@ -71,7 +64,7 @@ def search_shopify_stores(keyword, max_results=50):
                 'api_key': SERPAPI_KEY,
                 'q': query,
                 'num': 10,
-                'tbs': 'qdr:m',
+                'tbs': time_filter,
                 'engine': 'google',
             }
             r = requests.get(url, params=params, timeout=15)
@@ -118,32 +111,24 @@ def get_all_stores(niche_filter=''):
     conn.close()
     return [{'id':r[0],'domain':r[1],'name':r[2],'email':r[3],'niche':r[4],'date_found':r[5]} for r in rows]
 
-def get_niches():
-    conn = sqlite3.connect('stores.db')
-    c = conn.cursor()
-    c.execute('SELECT DISTINCT niche FROM stores')
-    rows = c.fetchall()
-    conn.close()
-    return [r[0] for r in rows]
-
-HTML = '''
-<!DOCTYPE html>
+HTML = '''<!DOCTYPE html>
 <html>
 <head>
 <title>Shopify Store Finder</title>
 <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
 <style>
-body{background:#f8f9fa;}
-.navbar{background:#5c6bc0!important;}
-.card{border:none;border-radius:12px;box-shadow:0 2px 8px rgba(0,0,0,0.08);}
-.btn-primary{background:#5c6bc0;border-color:#5c6bc0;}
-.btn-primary:hover{background:#3949ab;border-color:#3949ab;}
-.badge-email{background:#e8f5e9;color:#2e7d32;padding:4px 10px;border-radius:20px;font-size:12px;}
-.badge-no{background:#fce4ec;color:#c62828;padding:4px 10px;border-radius:20px;font-size:12px;}
-#loading{display:none;}
-.stat-card{background:linear-gradient(135deg,#5c6bc0,#3949ab);color:white;border-radius:12px;padding:1.2rem;}
-.stat-card h3{font-size:2rem;font-weight:700;}
-.stat-card small{opacity:0.8;}
+body{background:#f0f2f5;font-family:sans-serif;}
+.navbar{background:#4a3f8f!important;}
+.card{border:none;border-radius:14px;box-shadow:0 2px 12px rgba(0,0,0,0.07);margin-bottom:1rem;}
+.stat{background:#4a3f8f;color:white;border-radius:14px;padding:1rem;text-align:center;}
+.stat h2{font-size:2rem;font-weight:700;margin:0;}
+.stat p{margin:0;opacity:.8;font-size:.85rem;}
+.badge-email{background:#e8f5e9;color:#2e7d32;padding:3px 10px;border-radius:20px;font-size:11px;white-space:nowrap;}
+.badge-no{background:#fce4ec;color:#c62828;padding:3px 10px;border-radius:20px;font-size:11px;}
+#loading{display:none;text-align:center;padding:1rem;}
+.btn-search{background:#4a3f8f;color:white;border:none;padding:.5rem 1.5rem;border-radius:8px;font-weight:600;width:100%;}
+.btn-search:hover{background:#3a2f7f;color:white;}
+.btn-search:disabled{background:#999;cursor:not-allowed;}
 </style>
 </head>
 <body>
@@ -151,197 +136,178 @@ body{background:#f8f9fa;}
   <span class="navbar-brand fw-bold">🛍️ Shopify Store Finder</span>
   <span class="text-white-50 small">Personal Use Only</span>
 </nav>
-<div class="container py-4">
 
-  <div class="card p-4 mb-4">
-    <h5 class="mb-3 fw-bold">🔍 Find New Shopify Stores</h5>
-    <div class="row g-2">
-      <div class="col-md-5">
-        <input type="text" id="keyword" class="form-control" placeholder="Niche keyword (e.g. fashion, fitness, pets, beauty)">
-      </div>
-      <div class="col-md-3">
-        <select id="maxResults" class="form-select">
+<div class="container py-3">
+  <div class="card p-3">
+    <h6 class="fw-bold mb-3">🔍 Find New Shopify Stores</h6>
+    <div class="mb-2">
+      <input type="text" id="keyword" class="form-control" placeholder="Niche keyword (e.g. fashion, fitness, pets)">
+    </div>
+    <div class="row g-2 mb-2">
+      <div class="col-6">
+        <select id="maxResults" class="form-select form-select-sm">
           <option value="20">20 stores</option>
           <option value="30">30 stores</option>
-          <option value="50" selected>50 stores (max)</option>
+          <option value="50" selected>50 stores</option>
         </select>
       </div>
-      <div class="col-md-2">
-        <select id="timeFilter" class="form-select">
+      <div class="col-6">
+        <select id="timeFilter" class="form-select form-select-sm">
           <option value="qdr:w">Past week</option>
           <option value="qdr:m" selected>Past month</option>
           <option value="qdr:y">Past year</option>
         </select>
       </div>
-      <div class="col-md-2">
-        <button class="btn btn-primary w-100 fw-bold" onclick="searchStores()">Search ↗</button>
-      </div>
     </div>
-    <div id="loading" class="text-center mt-3">
-      <div class="spinner-border text-primary"></div>
-      <p class="mt-2 text-muted small">Searching Google for new Shopify stores and extracting emails... this may take 1-2 minutes.</p>
+    <button class="btn-search" id="searchBtn" type="button" onclick="doSearch()">🔍 Search Stores</button>
+    <div id="loading">
+      <div class="spinner-border text-primary mt-2" style="width:1.5rem;height:1.5rem;"></div>
+      <p class="text-muted small mt-1">Searching for stores and extracting emails...<br>Please wait 1-2 minutes.</p>
     </div>
   </div>
 
-  <div class="row g-3 mb-4">
-    <div class="col-4">
-      <div class="stat-card text-center">
-        <h3 id="totalCount">0</h3>
-        <small>Total Saved</small>
-      </div>
-    </div>
-    <div class="col-4">
-      <div class="stat-card text-center">
-        <h3 id="emailCount">0</h3>
-        <small>With Email</small>
-      </div>
-    </div>
-    <div class="col-4">
-      <div class="stat-card text-center">
-        <h3 id="nicheCount">0</h3>
-        <small>Niches</small>
-      </div>
-    </div>
+  <div class="row g-2 mb-2">
+    <div class="col-4"><div class="stat"><h2 id="totalCount">0</h2><p>Saved</p></div></div>
+    <div class="col-4"><div class="stat"><h2 id="emailCount">0</h2><p>Emails</p></div></div>
+    <div class="col-4"><div class="stat"><h2 id="nicheCount">0</h2><p>Niches</p></div></div>
   </div>
 
-  <div class="card p-4">
-    <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-      <h5 class="mb-0 fw-bold">📋 Saved Stores</h5>
-      <div class="d-flex gap-2 flex-wrap">
-        <input type="text" id="filterInput" class="form-control form-control-sm" placeholder="Filter stores..." oninput="filterTable()" style="width:180px;">
-        <select id="nicheFilterSelect" class="form-select form-select-sm" onchange="filterByNiche()" style="width:140px;">
-          <option value="">All niches</option>
-        </select>
-        <button class="btn btn-sm btn-success" onclick="exportCSV()">📥 CSV</button>
-        <button class="btn btn-sm btn-warning" onclick="exportEmails()">📧 Emails</button>
-        <button class="btn btn-sm btn-danger" onclick="clearAll()">🗑️ Clear</button>
+  <div class="card p-3">
+    <div class="d-flex justify-content-between align-items-center mb-2 flex-wrap gap-1">
+      <h6 class="fw-bold mb-0">📋 Saved Stores</h6>
+      <div class="d-flex gap-1 flex-wrap">
+        <button class="btn btn-sm btn-success" type="button" onclick="exportCSV()">📥 CSV</button>
+        <button class="btn btn-sm btn-warning" type="button" onclick="copyEmails()">📧 Emails</button>
+        <button class="btn btn-sm btn-danger" type="button" onclick="clearAll()">🗑️ Clear</button>
       </div>
+    </div>
+    <div class="mb-2 d-flex gap-1">
+      <input type="text" id="filterInput" class="form-control form-control-sm" placeholder="Filter..." oninput="filterTable()">
+      <select id="nicheSelect" class="form-select form-select-sm" style="width:130px;" onchange="filterByNiche()">
+        <option value="">All niches</option>
+      </select>
     </div>
     <div class="table-responsive">
-      <table class="table table-hover table-sm">
+      <table class="table table-sm table-hover">
         <thead class="table-light">
-          <tr>
-            <th>#</th>
-            <th>Store Name</th>
-            <th>Domain</th>
-            <th>Email</th>
-            <th>Niche</th>
-            <th>Date Found</th>
-          </tr>
+          <tr><th>#</th><th>Store</th><th>Email</th><th>Niche</th></tr>
         </thead>
         <tbody id="tableBody"></tbody>
       </table>
     </div>
-    <div id="emailsList" class="mt-3" style="display:none;">
-      <h6>📧 All Emails (copy below):</h6>
-      <textarea id="emailsText" class="form-control" rows="5" readonly></textarea>
-    </div>
+    <textarea id="emailsBox" class="form-control mt-2" rows="4" style="display:none;" readonly placeholder="Emails will appear here..."></textarea>
   </div>
 </div>
 
 <script>
 let allStores = [];
 
-async function searchStores(){
+function doSearch(){
   const keyword = document.getElementById('keyword').value.trim();
-  const maxResults = document.getElementById('maxResults').value;
+  if(!keyword){ alert('Please enter a keyword!'); return; }
+  const maxResults = parseInt(document.getElementById('maxResults').value);
   const timeFilter = document.getElementById('timeFilter').value;
-  if(!keyword){alert('Enter a keyword');return;}
-  document.getElementById('loading').style.display='block';
-  try{
-    const res = await fetch('/search', {
-      method:'POST',
-      headers:{'Content-Type':'application/json'},
-      body: JSON.stringify({keyword, max_results:parseInt(maxResults), time_filter:timeFilter})
-    });
-    const data = await res.json();
+  const btn = document.getElementById('searchBtn');
+  btn.disabled = true;
+  btn.textContent = 'Searching... please wait';
+  document.getElementById('loading').style.display = 'block';
+  fetch('/search', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({keyword: keyword, max_results: maxResults, time_filter: timeFilter})
+  })
+  .then(r => r.json())
+  .then(data => {
     alert(data.message);
     loadStores();
-  }catch(e){alert('Error: '+e);}
-  document.getElementById('loading').style.display='none';
+  })
+  .catch(e => alert('Error: ' + e))
+  .finally(() => {
+    btn.disabled = false;
+    btn.textContent = '🔍 Search Stores';
+    document.getElementById('loading').style.display = 'none';
+  });
 }
 
-async function loadStores(){
-  const res = await fetch('/stores');
-  allStores = await res.json();
-  renderTable(allStores);
-  updateStats(allStores);
-  updateNicheFilter(allStores);
+function loadStores(){
+  fetch('/stores')
+  .then(r => r.json())
+  .then(data => {
+    allStores = data;
+    renderTable(allStores);
+    updateStats(allStores);
+    updateNicheFilter(allStores);
+  });
 }
 
 function renderTable(stores){
   const tbody = document.getElementById('tableBody');
   tbody.innerHTML = '';
+  if(stores.length === 0){
+    tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted py-3">No stores found yet. Search above!</td></tr>';
+    return;
+  }
   stores.forEach((s,i) => {
     const em = s.email
-      ? `<span class="badge-email">${s.email}</span>`
-      : `<span class="badge-no">No email</span>`;
-    tbody.innerHTML += `<tr>
-      <td><small>${i+1}</small></td>
-      <td><small>${s.name}</small></td>
-      <td><small><a href="https://${s.domain}" target="_blank">${s.domain}</a></small></td>
-      <td>${em}</td>
-      <td><span class="badge bg-light text-dark">${s.niche}</span></td>
-      <td><small>${s.date_found}</small></td>
-    </tr>`;
+      ? '<span class="badge-email">'+s.email+'</span>'
+      : '<span class="badge-no">No email</span>';
+    tbody.innerHTML += '<tr><td><small>'+(i+1)+'</small></td><td><small><a href="https://'+s.domain+'" target="_blank">'+s.domain+'</a><br><span class="text-muted" style="font-size:10px;">'+s.name.substring(0,30)+'</span></small></td><td>'+em+'</td><td><span class="badge bg-light text-dark" style="font-size:10px;">'+s.niche+'</span></td></tr>';
   });
 }
 
 function updateStats(stores){
-  const withEmail = stores.filter(s=>s.email).length;
-  const niches = new Set(stores.map(s=>s.niche)).size;
   document.getElementById('totalCount').textContent = stores.length;
-  document.getElementById('emailCount').textContent = withEmail;
-  document.getElementById('nicheCount').textContent = niches;
+  document.getElementById('emailCount').textContent = stores.filter(s=>s.email).length;
+  document.getElementById('nicheCount').textContent = new Set(stores.map(s=>s.niche)).size;
 }
 
 function updateNicheFilter(stores){
   const niches = [...new Set(stores.map(s=>s.niche))];
-  const sel = document.getElementById('nicheFilterSelect');
+  const sel = document.getElementById('nicheSelect');
+  const cur = sel.value;
   sel.innerHTML = '<option value="">All niches</option>';
-  niches.forEach(n => sel.innerHTML += `<option value="${n}">${n}</option>`);
+  niches.forEach(n => sel.innerHTML += '<option value="'+n+'"'+(n===cur?' selected':'')+'>'+n+'</option>');
 }
 
 function filterTable(){
   const val = document.getElementById('filterInput').value.toLowerCase();
   const filtered = allStores.filter(s =>
-    s.name.toLowerCase().includes(val) ||
     s.domain.toLowerCase().includes(val) ||
+    s.name.toLowerCase().includes(val) ||
     (s.email||'').toLowerCase().includes(val)
   );
   renderTable(filtered);
 }
 
 function filterByNiche(){
-  const niche = document.getElementById('nicheFilterSelect').value;
+  const niche = document.getElementById('nicheSelect').value;
   const filtered = niche ? allStores.filter(s=>s.niche===niche) : allStores;
   renderTable(filtered);
   updateStats(filtered);
 }
 
-function exportCSV(){window.location.href='/export';}
+function exportCSV(){ window.location.href = '/export'; }
 
-function exportEmails(){
+function copyEmails(){
   const emails = allStores.filter(s=>s.email).map(s=>s.email).join('\n');
-  if(!emails){alert('No emails found yet.');return;}
-  document.getElementById('emailsList').style.display='block';
-  document.getElementById('emailsText').value=emails;
-  document.getElementById('emailsText').select();
+  if(!emails){ alert('No emails found yet!'); return; }
+  const box = document.getElementById('emailsBox');
+  box.style.display = 'block';
+  box.value = emails;
+  box.select();
   document.execCommand('copy');
-  alert('Emails copied to clipboard!');
+  alert('✅ '+allStores.filter(s=>s.email).length+' emails copied to clipboard!');
 }
 
-async function clearAll(){
-  if(!confirm('Clear all saved stores?'))return;
-  await fetch('/clear',{method:'POST'});
-  loadStores();
+function clearAll(){
+  if(!confirm('Clear all saved stores?')) return;
+  fetch('/clear', {method:'POST'}).then(() => loadStores());
 }
 
 loadStores();
 </script>
 </body>
-</html>
-'''
+</html>'''
 
 @app.route('/')
 def index():
@@ -351,23 +317,26 @@ def index():
 @app.route('/search', methods=['POST'])
 def search():
     data = request.json
-    keyword = data.get('keyword','')
+    keyword = data.get('keyword', '')
     max_results = data.get('max_results', 50)
     time_filter = data.get('time_filter', 'qdr:m')
-    stores = search_shopify_stores(keyword, max_results)
+    stores = search_shopify_stores(keyword, max_results, time_filter)
     count = 0
+    email_count = 0
     for store in stores:
         store['email'] = scrape_store_email(store['domain'])
+        if store['email']:
+            email_count += 1
         save_store(store)
         count += 1
     return jsonify({
-        'message': f'Found and saved {count} stores for "{keyword}"! {len([s for s in stores if s["email"]])} have emails.',
+        'message': f'✅ Found {count} stores for "{keyword}"! {email_count} have emails.',
         'count': count
     })
 
 @app.route('/stores')
 def stores():
-    niche = request.args.get('niche','')
+    niche = request.args.get('niche', '')
     return jsonify(get_all_stores(niche))
 
 @app.route('/export')
@@ -388,7 +357,7 @@ def clear():
     conn.execute('DELETE FROM stores')
     conn.commit()
     conn.close()
-    return jsonify({'status':'cleared'})
+    return jsonify({'status': 'cleared'})
 
 if __name__ == '__main__':
     init_db()
